@@ -15,9 +15,13 @@ import httpx
 
 from bilibili_downloader.api.client import BilibiliAPIClient
 from bilibili_downloader.api.endpoints import USER_AGENT
+from bilibili_downloader.core.archive import ArtifactPaths
 from bilibili_downloader.core.ffmpeg import FFmpegManager
 from bilibili_downloader.core.models import DownloadItem, StreamInfo, VideoQuality
-from bilibili_downloader.utils.network import BILIBILI_RESOURCE_HOSTS, trusted_https_url
+from bilibili_downloader.utils.network import (
+    BILIBILI_RESOURCE_HOSTS,
+    trusted_media_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,8 @@ class StreamDownloader:
         self._cancelled = False
         self.last_video_stream: Optional[StreamInfo] = None
         self.last_audio_stream: Optional[StreamInfo] = None
+        self.last_download_skipped = False
+        self.last_warnings: list[str] = []
 
     def cancel(self):
         """Signal the downloader to cancel current operation."""
@@ -65,6 +71,8 @@ class StreamDownloader:
         self,
         item: DownloadItem,
         progress_callback: Callable[[float, str], None],
+        media_metadata: Optional[dict[str, str]] = None,
+        cover_path: Optional[Path] = None,
     ) -> str:
         """Download a video to disk.
 
@@ -83,7 +91,17 @@ class StreamDownloader:
             Path to the merged output file.
         """
         self._cancelled = False
+        self.last_download_skipped = False
+        self.last_warnings = []
+        self.last_video_stream = None
+        self.last_audio_stream = None
         info = item.video_info
+
+        stable_output = ArtifactPaths(self._output_dir, item).media_path
+        if stable_output is not None and stable_output.is_file() and stable_output.stat().st_size > 0:
+            self.last_download_skipped = True
+            progress_callback(1.0, "视频已存在，正在补齐归档文件...")
+            return str(stable_output)
 
         progress_callback(0.0, "正在获取流地址...")
 
@@ -119,9 +137,14 @@ class StreamDownloader:
             raise RuntimeError("No matching audio stream found")
         self.last_audio_stream = audio_stream
 
-        with _reserved_download_cache(self._output_dir, item) as tmp, _reserved_output_path(
-            self._output_dir / item.filename
-        ) as output_path:
+        requested_output = stable_output or (self._output_dir / item.filename)
+        requested_output.parent.mkdir(parents=True, exist_ok=True)
+        output_context = (
+            _fixed_output_path(requested_output)
+            if stable_output is not None
+            else _reserved_output_path(requested_output)
+        )
+        with _reserved_download_cache(self._output_dir, item) as tmp, output_context as output_path:
             video_path = tmp / "video.m4s"
             audio_path = tmp / "audio.m4s"
 
@@ -150,13 +173,30 @@ class StreamDownloader:
             # Merge with FFmpeg
             progress_callback(0.82, "正在合并视频...")
             merged_path = tmp / "merged.mp4"
+            merge_kwargs = {}
+            if media_metadata:
+                merge_kwargs["metadata"] = media_metadata
+            if cover_path is not None:
+                merge_kwargs["cover_path"] = cover_path
             success, msg = FFmpegManager.merge_streams(
                 video_path,
                 audio_path,
                 merged_path,
                 custom_path=self._ffmpeg_path,
                 cancel_checker=lambda: self._cancelled,
+                **merge_kwargs,
             )
+            if not success and cover_path is not None:
+                self.last_warnings.append(f"封面嵌入失败，已保留独立封面：{msg}")
+                merge_kwargs.pop("cover_path", None)
+                success, msg = FFmpegManager.merge_streams(
+                    video_path,
+                    audio_path,
+                    merged_path,
+                    custom_path=self._ffmpeg_path,
+                    cancel_checker=lambda: self._cancelled,
+                    **merge_kwargs,
+                )
             if not success:
                 raise RuntimeError(f"FFmpeg merge failed: {msg}")
 
@@ -259,7 +299,12 @@ class StreamDownloader:
                                 exc_info=True,
                             )
                         return
-                    except (httpx.HTTPError, ConnectionError, OSError) as e:
+                    except (
+                        httpx.HTTPError,
+                        ConnectionError,
+                        OSError,
+                        ValueError,
+                    ) as e:
                         last_error = e
                         logger.debug(
                             "Download attempt %d failed for %s: %s",
@@ -287,7 +332,7 @@ class StreamDownloader:
         if resume_from > 0:
             headers["Range"] = f"bytes={resume_from}-"
 
-        current_url = trusted_https_url(url, BILIBILI_RESOURCE_HOSTS)
+        current_url = trusted_media_url(url, BILIBILI_RESOURCE_HOSTS)
         for _ in range(8):
             with client.stream(
                 "GET",
@@ -300,7 +345,7 @@ class StreamDownloader:
                     location = response.headers.get("location")
                     if not location:
                         response.raise_for_status()
-                    current_url = trusted_https_url(
+                    current_url = trusted_media_url(
                         urljoin(current_url, location),
                         BILIBILI_RESOURCE_HOSTS,
                     )
@@ -437,6 +482,21 @@ def _reserved_output_path(requested: Path):
     finally:
         with _OUTPUT_PATH_LOCK:
             _RESERVED_OUTPUT_PATHS.discard(candidate)
+
+
+@contextmanager
+def _fixed_output_path(requested: Path):
+    """Reserve the exact stable archive path without collision renaming."""
+    requested = requested.resolve()
+    with _OUTPUT_PATH_LOCK:
+        if requested in _RESERVED_OUTPUT_PATHS:
+            raise RuntimeError(f"同一视频分 P 已在下载：{requested.name}")
+        _RESERVED_OUTPUT_PATHS.add(requested)
+    try:
+        yield requested
+    finally:
+        with _OUTPUT_PATH_LOCK:
+            _RESERVED_OUTPUT_PATHS.discard(requested)
 
 
 @contextmanager

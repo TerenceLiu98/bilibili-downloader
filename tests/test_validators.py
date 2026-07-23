@@ -2,7 +2,11 @@
 
 import pytest
 
-from bilibili_downloader.utils.network import BILIBILI_RESOURCE_HOSTS, trusted_https_url
+from bilibili_downloader.utils.network import (
+    BILIBILI_RESOURCE_HOSTS,
+    trusted_https_url,
+    trusted_media_url,
+)
 from bilibili_downloader.utils.validators import (
     extract_aid,
     extract_bvid,
@@ -134,6 +138,25 @@ def test_trusted_https_url_accepts_protocol_relative_resource_url():
 def test_trusted_https_url_accepts_bilibili_partner_edge_domain():
     url = "https://node.edge.mountaintoys.cn/video.m4s"
     assert trusted_https_url(url, BILIBILI_RESOURCE_HOSTS) == url
+
+
+def test_trusted_media_url_upgrades_bilibili_cdn_http_url():
+    url = "http://upos-sz.bilivideo.com/video.m4s?token=abc"
+
+    assert trusted_media_url(url, BILIBILI_RESOURCE_HOSTS) == (
+        "https://upos-sz.bilivideo.com/video.m4s?token=abc"
+    )
+
+
+def test_trusted_media_url_accepts_bilibili_edge_port_4483():
+    url = "https://node.edge.mountaintoys.cn:4483/video.m4s"
+
+    assert trusted_media_url(url, BILIBILI_RESOURCE_HOSTS) == url
+
+
+def test_trusted_media_url_rejects_untrusted_http_url():
+    with pytest.raises(ValueError):
+        trusted_media_url("http://example.org/video.m4s", BILIBILI_RESOURCE_HOSTS)
 
 
 def test_trusted_https_url_does_not_trust_partner_parent_domain():

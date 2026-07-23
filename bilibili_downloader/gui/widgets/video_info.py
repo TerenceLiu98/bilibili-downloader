@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from bilibili_downloader.gui.resources.paths import asset_path
-from bilibili_downloader.utils.network import BILIBILI_RESOURCE_HOSTS, trusted_https_url
+from bilibili_downloader.utils.network import BILIBILI_RESOURCE_HOSTS, trusted_media_url
 
 MAX_COVER_BYTES = 10 * 1024 * 1024
 MAX_COVER_PIXELS = 25_000_000
@@ -39,7 +39,7 @@ class _CoverLoadRunner(QRunnable):
         import httpx
 
         try:
-            url = trusted_https_url(self._url, BILIBILI_RESOURCE_HOSTS)
+            url = trusted_media_url(self._url, BILIBILI_RESOURCE_HOSTS)
             content = bytearray()
             with httpx.stream("GET", url, timeout=10.0) as resp:
                 resp.raise_for_status()

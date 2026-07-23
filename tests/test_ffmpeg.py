@@ -96,6 +96,20 @@ class TestFFmpegBuildCommand:
         assert "-vf" in cmd
         assert "scale=1920:1080" in cmd
 
+    def test_merge_embeds_cover_and_metadata(self):
+        cmd = FFmpegManager.build_merge_command(
+            Path("video.m4s"),
+            Path("audio.m4s"),
+            Path("output.mp4"),
+            cover_path=Path("cover.jpg"),
+            metadata={"title": "Episode", "artist": "UP"},
+        )
+
+        assert "cover.jpg" in cmd[7]
+        assert "attached_pic" in cmd
+        assert "title=Episode" in cmd
+        assert "artist=UP" in cmd
+
 
 class TestFFmpegMerge:
     def test_temp_output_keeps_media_suffix(self, monkeypatch, tmp_path):

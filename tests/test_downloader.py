@@ -40,6 +40,36 @@ def test_download_stream_falls_back_to_backup_url(monkeypatch, tmp_path):
     assert calls == ["base", "backup"]
 
 
+def test_download_stream_falls_back_after_url_validation_error(
+    monkeypatch, tmp_path
+):
+    downloader = StreamDownloader(
+        api_client=object(), output_dir=str(tmp_path), max_retries=1
+    )
+    calls = []
+
+    def fake_download_url(client, url, dest, progress_callback):
+        calls.append(url)
+        if url == "invalid-primary":
+            raise ValueError("invalid media URL")
+        progress_callback(1.0)
+
+    monkeypatch.setattr(downloader, "_download_url", fake_download_url)
+    downloader._download_stream(
+        StreamInfo(
+            base_url="invalid-primary",
+            backup_url=["https://upos-sz.bilivideo.com/video.m4s"],
+        ),
+        tmp_path / "video.m4s",
+        lambda _progress: None,
+    )
+
+    assert calls == [
+        "invalid-primary",
+        "https://upos-sz.bilivideo.com/video.m4s",
+    ]
+
+
 def test_download_stream_requires_at_least_one_url(tmp_path):
     downloader = StreamDownloader(api_client=object(), output_dir=str(tmp_path), max_retries=1)
 

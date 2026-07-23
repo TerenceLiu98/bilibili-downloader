@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -115,15 +116,33 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
 
         # Option checkboxes
-        options_layout = QHBoxLayout()
+        options_layout = QGridLayout()
         self._danmaku_check = QCheckBox("默认下载弹幕")
         self._danmaku_check.setChecked(self._settings.download_danmaku)
         self._subtitle_check = QCheckBox("默认下载字幕")
         self._subtitle_check.setChecked(self._settings.download_subtitle)
-        options_layout.addWidget(self._danmaku_check)
-        options_layout.addWidget(self._subtitle_check)
-        options_layout.addStretch()
+        options_layout.addWidget(self._danmaku_check, 0, 0)
+        options_layout.addWidget(self._subtitle_check, 0, 1)
+        self._metadata_check = QCheckBox("默认保存元信息")
+        self._metadata_check.setChecked(self._settings.download_metadata)
+        self._cover_check = QCheckBox("默认保存封面")
+        self._cover_check.setChecked(self._settings.download_cover)
+        self._comments_check = QCheckBox("默认归档评论")
+        self._comments_check.setChecked(self._settings.download_comments)
+        options_layout.addWidget(self._metadata_check, 1, 0)
+        options_layout.addWidget(self._cover_check, 1, 1)
+        options_layout.addWidget(self._comments_check, 2, 0)
         layout.addLayout(options_layout)
+
+        embed_layout = QHBoxLayout()
+        self._embed_metadata_check = QCheckBox("写入 MP4 元信息")
+        self._embed_metadata_check.setChecked(self._settings.embed_metadata)
+        self._embed_cover_check = QCheckBox("写入 MP4 封面")
+        self._embed_cover_check.setChecked(self._settings.embed_cover)
+        embed_layout.addWidget(self._embed_metadata_check)
+        embed_layout.addWidget(self._embed_cover_check)
+        embed_layout.addStretch()
+        layout.addLayout(embed_layout)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
@@ -179,4 +198,9 @@ class SettingsDialog(QDialog):
         self._settings.ffmpeg_path = self._ffmpeg_path.text()
         self._settings.download_danmaku = self._danmaku_check.isChecked()
         self._settings.download_subtitle = self._subtitle_check.isChecked()
+        self._settings.download_metadata = self._metadata_check.isChecked()
+        self._settings.download_cover = self._cover_check.isChecked()
+        self._settings.download_comments = self._comments_check.isChecked()
+        self._settings.embed_metadata = self._embed_metadata_check.isChecked()
+        self._settings.embed_cover = self._embed_cover_check.isChecked()
         return self._settings

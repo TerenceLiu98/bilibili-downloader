@@ -23,6 +23,7 @@ PAGELIST_ENDPOINT = "/x/player/pagelist"
 
 # Navigation / user info (for WBI key extraction)
 NAV_ENDPOINT = "/x/web-interface/nav"
+FINGERPRINT_ENDPOINT = "/x/frontend/finger/spi"
 
 # QR login
 QR_GENERATE_ENDPOINT = "/x/passport-login/web/qrcode/generate"
@@ -30,5 +31,10 @@ QR_POLL_ENDPOINT = "/x/passport-login/web/qrcode/poll"
 
 # Danmaku (no WBI required)
 DANMAKU_XML_URL = "https://comment.bilibili.com/{cid}.xml"
+CREATOR_PROFILE_ENDPOINT = "/x/space/wbi/acc/info"
+CREATOR_VIDEOS_ENDPOINT = "/x/space/wbi/arc/search"
+CREATOR_MEDIALIST_ENDPOINT = "/x/v2/medialist/resource/list"
+COMMENTS_ENDPOINT = "/x/v2/reply"
+COMMENT_REPLIES_ENDPOINT = "/x/v2/reply/reply"
 
 # Subtitle (direct URL from playurl response, no fixed endpoint)

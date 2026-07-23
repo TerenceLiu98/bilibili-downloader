@@ -1,6 +1,6 @@
 """Network boundary helpers for URLs supplied by remote API responses."""
 
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 BILIBILI_WEB_HOSTS = ("bilibili.com", "b23.tv")
 BILIBILI_RESOURCE_HOSTS = (
@@ -10,6 +10,7 @@ BILIBILI_RESOURCE_HOSTS = (
     "hdslb.com",
     "edge.mountaintoys.cn",
 )
+MEDIA_HTTPS_PORTS = (None, 443, 4483)
 
 
 def trusted_https_url(url: str, allowed_domains: tuple[str, ...]) -> str:
@@ -29,3 +30,33 @@ def trusted_https_url(url: str, allowed_domains: tuple[str, ...]) -> str:
     if not any(hostname == domain or hostname.endswith(f".{domain}") for domain in allowed_domains):
         raise ValueError(f"不受信任的网络目标：{hostname}")
     return url
+
+
+def trusted_media_url(url: str, allowed_domains: tuple[str, ...]) -> str:
+    """Upgrade a trusted CDN HTTP URL to HTTPS, then validate it strictly."""
+    if url.startswith("//"):
+        return trusted_https_url(url, allowed_domains)
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    trusted_host = any(
+        hostname == domain or hostname.endswith(f".{domain}")
+        for domain in allowed_domains
+    )
+    if (
+        parsed.scheme == "https"
+        and trusted_host
+        and not parsed.username
+        and not parsed.password
+        and parsed.port in MEDIA_HTTPS_PORTS
+    ):
+        return url
+    if (
+        parsed.scheme == "http"
+        and trusted_host
+        and not parsed.username
+        and not parsed.password
+        and parsed.port in (None, 80)
+    ):
+        netloc = hostname if parsed.port is None else f"{hostname}:443"
+        url = urlunparse(parsed._replace(scheme="https", netloc=netloc))
+    return trusted_https_url(url, allowed_domains)

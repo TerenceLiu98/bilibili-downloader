@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/itsVicOC/bilibili-downloader)](https://github.com/itsVicOC/bilibili-downloader/releases/latest)
 [![License](https://img.shields.io/github/license/itsVicOC/bilibili-downloader)](LICENSE)
 
-一款支持 GUI 和 CLI 的 B 站视频下载工具。可以解析 BV 号、AV 号、视频链接与 b23.tv 短链，选择画质和编码，并下载弹幕、字幕后自动合并音视频。
+一款支持 GUI 和 CLI 的 B 站视频下载与原始资料归档工具。可以解析单个视频，也可以抓取 UP 主的完整投稿索引，按需保存元信息、封面、评论、弹幕和字幕。
 
 ![BiliFlow 夜间界面](docs/images/biliflow-dark.png)
 
@@ -48,7 +48,9 @@ Get-FileHash .\BilibiliDownloader-Windows-vX.Y.Z.zip -Algorithm SHA256
 - 支持 240P 至 8K、HDR、Dolby Vision，以及 AVC、HEVC、AV1 编码选择。
 - 自动选择匹配音轨并通过 FFmpeg 无损封装为 MP4。
 - 支持多 P 单选或全选、批量解析、并发下载、取消、失败重试和跨重启续传。
-- 支持弹幕转 ASS、字幕转 SRT。
+- 支持抓取 UP 主全部投稿为可复用 `index.json`，筛选后批量入队。
+- 支持原始元信息 JSON、全部楼层/嵌套评论 JSON、弹幕 XML，以及 ASS/SRT 转换文件。
+- 支持 MP4 标签和封面嵌入；重复运行会跳过已有媒体并补齐缺失归档。
 - 支持 SESSDATA 登录；优先保存到系统凭据库。
 - 网络解析、登录检查、封面加载与下载任务均在后台执行，避免阻塞界面。
 - 日间/夜间主题跟随系统设置实时切换，无需重启。
@@ -94,6 +96,14 @@ python -m bilibili_downloader download BV1GJ411x7h7 \
   --subtitle \
   --page all \
   --codec 12
+
+# 刷新某个 UP 主的完整索引，但暂不下载
+python -m bilibili_downloader creator 123456 --output ./downloads
+
+# 从已有索引下载全部投稿，并归档评论和弹幕
+python -m bilibili_downloader download-index \
+  ./downloads/UP名称_123456/index.json \
+  --all --comments --danmaku
 ```
 
 运行 `python -m bilibili_downloader --help` 或阅读 [用户指南](docs/USER_GUIDE.md) 查看全部参数。

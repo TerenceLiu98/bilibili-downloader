@@ -140,9 +140,18 @@ class DanmakuDownloader:
                 f.write(f"Dialogue: 0,{start},{end},{style},,0,0,0,{effect},{text}\n")
 
     @staticmethod
-    def download_and_convert(cid: int, output_path: Path) -> None:
-        """Convenience: download XML and convert to ASS in one call."""
+    def download_and_convert(
+        cid: int,
+        output_path: Path,
+        raw_output_path: Path | None = None,
+    ) -> None:
+        """Download XML once, optionally preserve it, and convert to ASS."""
         xml_data = DanmakuDownloader.download_xml(cid)
+        if raw_output_path is not None:
+            raw_output_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = raw_output_path.with_name(f".{raw_output_path.name}.tmp")
+            temporary.write_bytes(xml_data)
+            temporary.replace(raw_output_path)
         DanmakuDownloader.xml_to_ass(xml_data, output_path)
 
 

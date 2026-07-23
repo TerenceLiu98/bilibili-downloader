@@ -7,7 +7,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bilibili_downloader.core.models import AppSettings
+from bilibili_downloader.core.models import (
+    AppSettings,
+    CreatorVideoEntry,
+    CreatorVideoIndex,
+)
+from bilibili_downloader.gui.dialogs.creator_dialog import CreatorDialog
 from bilibili_downloader.gui.dialogs.login_dialog import LoginDialog
 from bilibili_downloader.gui.dialogs.settings_dialog import SettingsDialog
 from bilibili_downloader.gui.main_window import MainWindow
@@ -66,3 +71,23 @@ def test_main_window_separates_download_and_service_pools(qtbot, monkeypatch):
     controls = window.findChild(QWidget, "ControlPanel")
     assert controls.minimumHeight() == 340
     assert controls.layout().verticalSpacing() == 8
+
+
+def test_creator_dialog_defaults_to_all_and_filters_rows(qtbot, tmp_path):
+    dialog = CreatorDialog(object(), str(tmp_path))
+    qtbot.addWidget(dialog)
+    dialog._set_index(CreatorVideoIndex(
+        mid=42,
+        name="UP",
+        source="42",
+        fetched_at="2026-07-22T00:00:00+00:00",
+        videos=[
+            CreatorVideoEntry(bvid="BV0000000001", title="Alpha"),
+            CreatorVideoEntry(bvid="BV0000000002", title="Beta"),
+        ],
+    ))
+
+    assert dialog.selected_bvids() == ["BV0000000001", "BV0000000002"]
+    dialog._filter.setText("beta")
+    assert dialog._table.isRowHidden(0)
+    assert not dialog._table.isRowHidden(1)

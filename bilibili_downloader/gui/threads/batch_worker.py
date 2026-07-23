@@ -44,6 +44,13 @@ class BatchRunner(QRunnable):
         codec: int,
         download_danmaku: bool,
         download_subtitle: bool,
+        download_metadata: bool = True,
+        download_cover: bool = True,
+        download_comments: bool = False,
+        embed_metadata: bool = True,
+        embed_cover: bool = True,
+        creator_mid: int = 0,
+        creator_name: str = "",
     ):
         super().__init__()
         self._worker = worker
@@ -53,6 +60,13 @@ class BatchRunner(QRunnable):
         self._codec = codec or 12
         self._download_danmaku = download_danmaku
         self._download_subtitle = download_subtitle
+        self._download_metadata = download_metadata
+        self._download_cover = download_cover
+        self._download_comments = download_comments
+        self._embed_metadata = embed_metadata
+        self._embed_cover = embed_cover
+        self._creator_mid = creator_mid
+        self._creator_name = creator_name
         self.setAutoDelete(True)
 
     def run(self):
@@ -74,6 +88,13 @@ class BatchRunner(QRunnable):
                             selected_video_codec=self._codec,
                             download_danmaku=self._download_danmaku,
                             download_subtitle=self._download_subtitle,
+                            download_metadata=self._download_metadata,
+                            download_cover=self._download_cover,
+                            download_comments=self._download_comments,
+                            embed_metadata=self._embed_metadata,
+                            embed_cover=self._embed_cover,
+                            creator_mid=self._creator_mid,
+                            creator_name=self._creator_name,
                         )
                         self._worker.item_ready.emit(item)
                 except Exception as e:  # noqa: BLE001

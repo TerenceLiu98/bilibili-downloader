@@ -29,6 +29,7 @@ from bilibili_downloader.core.models import (
     VideoQuality,
 )
 from bilibili_downloader.gui.dialogs.batch_dialog import BatchDialog
+from bilibili_downloader.gui.dialogs.creator_dialog import CreatorDialog
 from bilibili_downloader.gui.dialogs.login_dialog import LoginDialog
 from bilibili_downloader.gui.dialogs.settings_dialog import SettingsDialog
 from bilibili_downloader.gui.resources.paths import asset_path
@@ -147,6 +148,10 @@ class MainWindow(QMainWindow):
         batch_nav.setObjectName("NavButton")
         batch_nav.clicked.connect(self._on_batch_clicked)
         side_layout.addWidget(batch_nav)
+        creator_nav = QPushButton("  UP 主索引 / CREATOR")
+        creator_nav.setObjectName("NavButton")
+        creator_nav.clicked.connect(self._on_creator_clicked)
+        side_layout.addWidget(creator_nav)
         settings_nav = QPushButton("  下载设置 / CONFIG")
         settings_nav.setObjectName("NavButton")
         settings_nav.clicked.connect(self._on_settings_triggered)
@@ -269,22 +274,32 @@ class MainWindow(QMainWindow):
         self._codec_combo.setToolTip("H.265 体积与画质均衡；H.264 兼容性更好；AV1 体积更小")
         controls_layout.addWidget(self._codec_combo, 4, 1)
 
-        self._danmaku_check = self._create_checkbox("下载弹幕", self._settings.download_danmaku)
-        self._subtitle_check = self._create_checkbox("下载字幕", self._settings.download_subtitle)
+        self._metadata_check = self._create_checkbox("元信息", self._settings.download_metadata)
+        self._cover_check = self._create_checkbox("封面", self._settings.download_cover)
+        controls_layout.addWidget(self._metadata_check, 5, 0)
+        controls_layout.addWidget(self._cover_check, 5, 1)
+        self._comments_check = self._create_checkbox("评论", self._settings.download_comments)
+        self._danmaku_check = self._create_checkbox("弹幕", self._settings.download_danmaku)
+        controls_layout.addWidget(self._comments_check, 6, 0)
+        controls_layout.addWidget(self._danmaku_check, 6, 1)
+        self._subtitle_check = self._create_checkbox("字幕", self._settings.download_subtitle)
         self._subtitle_check.setEnabled(False)
-        controls_layout.addWidget(self._danmaku_check, 5, 0)
-        controls_layout.addWidget(self._subtitle_check, 5, 1)
+        controls_layout.addWidget(self._subtitle_check, 7, 0, 1, 2)
 
         self._download_btn = QPushButton("加入下载队列")
         self._download_btn.setObjectName("DownloadButton")
         self._download_btn.clicked.connect(self._on_download_clicked)
-        controls_layout.addWidget(self._download_btn, 6, 0, 1, 2)
+        controls_layout.addWidget(self._download_btn, 8, 0, 1, 2)
 
         self._batch_btn = QPushButton("批量导入链接")
         self._batch_btn.setObjectName("SecondaryButton")
         self._batch_btn.clicked.connect(self._on_batch_clicked)
-        controls_layout.addWidget(self._batch_btn, 7, 0, 1, 2)
-        controls_layout.setRowStretch(8, 1)
+        controls_layout.addWidget(self._batch_btn, 9, 0)
+        self._creator_btn = QPushButton("UP 主投稿索引")
+        self._creator_btn.setObjectName("SecondaryButton")
+        self._creator_btn.clicked.connect(self._on_creator_clicked)
+        controls_layout.addWidget(self._creator_btn, 9, 1)
+        controls_layout.setRowStretch(10, 1)
         self._content_layout.addWidget(controls, 3)
         layout.addLayout(self._content_layout)
 
@@ -561,6 +576,11 @@ class MainWindow(QMainWindow):
                 selected_video_codec=codec,
                 download_danmaku=self._danmaku_check.isChecked(),
                 download_subtitle=self._subtitle_check.isChecked(),
+                download_metadata=self._metadata_check.isChecked(),
+                download_cover=self._cover_check.isChecked(),
+                download_comments=self._comments_check.isChecked(),
+                embed_metadata=self._settings.embed_metadata,
+                embed_cover=self._settings.embed_cover,
             )
             self._enqueue_download(item)
 
@@ -594,7 +614,7 @@ class MainWindow(QMainWindow):
         self._download_list.register_worker(download_id, worker)
         self._download_pool.start(runner)
 
-    def _start_batch_download(self, urls: list[str]):
+    def _start_batch_download(self, urls: list[str], creator_index=None):
         """Resolve multiple videos in background and add to download queue."""
         self._status_bar.showMessage(f"正在批量解析 {len(urls)} 个视频...")
         worker = BatchWorker()
@@ -611,6 +631,13 @@ class MainWindow(QMainWindow):
             self._codec_combo.currentData(),
             self._danmaku_check.isChecked(),
             self._subtitle_check.isChecked(),
+            self._metadata_check.isChecked(),
+            self._cover_check.isChecked(),
+            self._comments_check.isChecked(),
+            self._settings.embed_metadata,
+            self._settings.embed_cover,
+            creator_index.mid if creator_index else 0,
+            creator_index.name if creator_index else "",
         )
         self._service_pool.start(runner)
 
@@ -662,6 +689,11 @@ class MainWindow(QMainWindow):
                 return
             self._settings = new_settings
             self._apply_thread_pool_settings()
+            self._metadata_check.setChecked(new_settings.download_metadata)
+            self._cover_check.setChecked(new_settings.download_cover)
+            self._comments_check.setChecked(new_settings.download_comments)
+            self._danmaku_check.setChecked(new_settings.download_danmaku)
+            self._subtitle_check.setChecked(new_settings.download_subtitle)
 
     def _on_login_triggered(self):
         """Open login dialog."""
@@ -740,6 +772,19 @@ class MainWindow(QMainWindow):
             urls = dialog.get_urls()
             if urls:
                 self._start_batch_download(urls)
+
+    def _on_creator_clicked(self):
+        """Fetch/import a creator index, then enqueue the selected submissions."""
+        dialog = CreatorDialog(
+            self._api_client,
+            self._settings.output_dir,
+            self,
+        )
+        if dialog.exec():
+            index = dialog.creator_index
+            bvids = dialog.selected_bvids()
+            if index is not None and bvids:
+                self._start_batch_download(bvids, creator_index=index)
 
     def _on_check_ffmpeg(self):
         """Check FFmpeg availability."""

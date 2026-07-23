@@ -2,7 +2,7 @@
 
 ## 支持范围
 
-BiliFlow 支持单个视频或多 P 视频的 BV 号、AV 号、`bilibili.com/video/...` 链接和 b23.tv 短链。合集、番剧、课程、直播和动态页面目前不在支持范围内。
+BiliFlow 支持单个视频或多 P 视频的 BV 号、AV 号、`bilibili.com/video/...` 链接和 b23.tv 短链，也支持索引某个 UP 主的全部公开投稿。合集、番剧、课程、直播和动态页面目前不在支持范围内。
 
 可用画质取决于视频本身、账号权限和 Bilibili 返回的流。未登录时通常无法获得会员画质；选择的编码不可用时，应用会回退到实际可用的流。
 
@@ -17,6 +17,15 @@ BiliFlow 支持单个视频或多 P 视频的 BV 号、AV 号、`bilibili.com/vi
 5. 失败任务可在操作列重试；取消会停止网络传输并终止正在运行的 FFmpeg。
 
 批量下载入口接受每行一个链接或编号。解析成功的项目会加入队列；失败项目会单独显示原因，不影响其他任务。
+
+### UP 主投稿索引
+
+1. 打开侧栏或下载选项区的“UP 主索引”，输入 UID 或空间链接。
+2. 点击“刷新索引”。应用会遍历投稿分页，并把完整响应保存为 UP 主目录中的 `index.json`。
+3. 可按标题/BVID 搜索，默认全选，也可全不选或逐项取消。
+4. 点击“所选视频加入队列”后才会开始解析和下载；每个多 P 视频会展开为全部分 P。
+
+也可以导入之前保存的 `index.json`，无需重新获取列表。再次下载时，已有且非空的稳定路径 MP4 会被跳过，任务仍会补齐缺失的元信息、封面、评论、弹幕或字幕。默认不覆盖已有 sidecar。
 
 ### 登录
 
@@ -34,7 +43,8 @@ BiliFlow 支持单个视频或多 P 视频的 BV 号、AV 号、`bilibili.com/vi
 - **默认画质**：新解析任务的初始画质。
 - **最大并发**：范围 1–8。网络或磁盘较慢时建议 1–3。
 - **FFmpeg 路径**：留空时从系统 PATH 自动查找，也可以选择自定义可执行文件。
-- **弹幕/字幕**：控制新任务的默认勾选状态。
+- **元信息/封面**：默认启用；可同时写入 MP4 标签和封面。
+- **评论/弹幕/字幕**：控制新任务的默认勾选状态；评论默认关闭。
 
 主题不使用单独开关，会跟随 Windows、macOS 或 Linux 桌面环境的日间/夜间设置实时切换。
 
@@ -75,6 +85,33 @@ python -m bilibili_downloader download BV1GJ411x7h7 \
 | `-c, --codec` | 视频编码：`7` AVC、`12` HEVC、`13` AV1 |
 | `-p, --page` | 分 P 序号或 `all`；默认 `1` |
 | `--subtitle-language` | 首选字幕语言代码；默认 `zh-Hans` |
+| `--metadata / --no-metadata` | 保存/不保存 Bilibili 原始视频元信息 JSON |
+| `--cover / --no-cover` | 保存/不保存封面 JPEG |
+| `--comments / --no-comments` | 保存全部顶层评论及嵌套回复的原始 JSON 页面 |
+| `--embed-metadata / --no-embed-metadata` | 开关 MP4 标签写入 |
+| `--embed-cover / --no-embed-cover` | 开关 MP4 封面写入 |
+| `--refresh-sidecars` | 显式覆盖已有 sidecar；省略时只补缺失文件 |
+
+抓取索引并可选下载：
+
+```bash
+# 仅刷新并保存 index.json
+python -m bilibili_downloader creator 123456 --output ./downloads
+
+# 刷新索引后下载全部投稿
+python -m bilibili_downloader creator 123456 --download-all --comments
+
+# 只下载指定投稿，可重复 --bvid
+python -m bilibili_downloader creator 123456 \
+  --bvid BV1xxxxxxxxx --bvid BV1yyyyyyyyy
+
+# 复用已有索引
+python -m bilibili_downloader download-index ./downloads/UP名称_123456/index.json --all
+```
+
+GUI 抓取长索引时会在第 1 批后创建 `index.partial.json`，随后每 10 批原子更新一次。
+再次刷新同一 UID 会自动从该文件记录的 OID 游标继续；完整抓取成功后写入
+`index.json` 并移除检查点。索引位于设置中的“输出目录”，不在项目源码目录。
 
 画质代码：
 
@@ -96,13 +133,32 @@ python -m bilibili_downloader download BV1GJ411x7h7 \
 | Linux 配置 | `$XDG_CONFIG_HOME/biliflow/config.json`，未设置时使用 `~/.config/biliflow/config.json` |
 | 损坏配置备份 | 与配置同目录的 `config.json.bak` |
 | 视频输出 | `~/Downloads/bilibili` |
-| 登录凭据 | 系统凭据库；不可用时回退到配置文件 |
+| 登录凭据 | 系统凭据库，并在权限为 `0600` 的配置文件中保留混淆恢复副本 |
 
 旧版 `~/.bilibili-downloader/config.json` 会在首次启动时复制到当前平台的原生配置目录，原文件会保留。
 
 应用在输出目录的 `.biliflow-parts/` 中保存断点数据并支持 HTTP Range 续传。成功合并后会清理对应中间文件；取消、网络中断或异常退出后，下次以相同视频、分 P、画质和编码重试时会继续使用已有数据。该目录可能占用较大空间，确认不再续传后可手动删除。
 
+批量下载时，视频和音频 CDN 传输仍使用设置中的并发数；`api.bilibili.com` 的元数据请求会全局串行，并在成功请求间随机等待 1–3 秒。遇到 `412/429/-352/-401` 风控后，所有任务共享 15/45/120 秒冷却并自动重新签名重试。
+
 文件名会移除当前操作系统不允许的字符。多 P 视频会在标题后追加分 P 序号和名称，避免互相覆盖。
+
+UP 主归档采用稳定 BVID/CID 路径。标题变化时会优先复用已存在的标识符目录：
+
+```text
+<UP名称>_<MID>/
+  index.json
+  [BVID] 视频标题/
+    info.json
+    comments.json
+    cover.jpg
+    P01 [CID] 分P标题.mp4
+    P01 [CID] 分P标题.danmaku.xml
+    P01 [CID] 分P标题.danmaku.ass
+    P01 [CID] 分P标题.<语言>.srt
+```
+
+评论归档按 0.5 秒节流请求，最多重试 5 次，并在分页过程中原子写入检查点。完整翻页通常需要登录；未登录时 Bilibili 可能只返回首批评论。sidecar 失败只会产生任务警告，不会删除已经完成的视频。
 
 ## 升级与校验
 

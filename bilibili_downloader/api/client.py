@@ -1,6 +1,8 @@
 """Bilibili API client for video metadata and playback URLs."""
 
+import json
 import logging
+import random
 import threading
 import time
 from typing import Optional
@@ -35,7 +37,12 @@ class BilibiliAPIClient:
 
     WBI_CACHE_TTL = 24 * 3600  # 24 hours
 
-    def __init__(self, sessdata: Optional[str] = None):
+    def __init__(
+        self,
+        sessdata: Optional[str] = None,
+        api_interval_range: tuple[float, float] = (1.0, 3.0),
+        risk_retry_delays: tuple[float, ...] = (15.0, 45.0, 120.0),
+    ):
         self._client = httpx.Client(
             base_url=ep.BASE_URL,
             headers={
@@ -50,7 +57,15 @@ class BilibiliAPIClient:
         self._wbi_mixin_key: Optional[str] = None
         self._wbi_cached_at: Optional[float] = None
         self._wbi_lock = threading.Lock()
+        self._creator_session_lock = threading.Lock()
+        self._creator_session_ready = False
         self._sessdata = sessdata
+        lower, upper = sorted(max(0.0, value) for value in api_interval_range)
+        self._api_interval_range = (lower, upper)
+        self._risk_retry_delays = risk_retry_delays
+        self._api_request_lock = threading.Lock()
+        self._next_api_request_at = 0.0
+        self._risk_streak = 0
 
     @property
     def sessdata(self) -> Optional[str]:
@@ -77,7 +92,7 @@ class BilibiliAPIClient:
                 if now - self._wbi_cached_at < self.WBI_CACHE_TTL:
                     return
 
-            resp = self._client.get(ep.NAV_ENDPOINT)
+            resp = self._request(ep.NAV_ENDPOINT)
             resp.raise_for_status()
             data = resp.json()
 
@@ -91,7 +106,7 @@ class BilibiliAPIClient:
             self._wbi_cached_at = now
 
     def _retry_on_wbi_error(self, action):
-        """Execute an API call, refreshing WBI keys on -352 errors.
+        """Retry rate-limited API failures, rebuilding signed params each time.
 
         Args:
             action: Callable that takes no args and returns parsed data.
@@ -100,17 +115,64 @@ class BilibiliAPIClient:
         Returns:
             Parsed response data.
         """
-        try:
-            return action()
-        except BilibiliAPIError as e:
-            if e.code != -352:
-                raise
-            # WBI signature expired/invalid — refresh keys and retry once
-            logger.warning("WBI signature error (-352), refreshing keys")
-            with self._wbi_lock:
-                self._wbi_mixin_key = None
-                self._wbi_cached_at = None
-            return action()
+        for attempt in range(len(self._risk_retry_delays) + 1):
+            try:
+                return action()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in (412, 429):
+                    raise
+                if attempt >= len(self._risk_retry_delays):
+                    raise
+                logger.warning(
+                    "Bilibili API returned HTTP %s; retrying after shared cooldown",
+                    exc.response.status_code,
+                )
+            except BilibiliAPIError as exc:
+                if exc.code not in (-401, -352):
+                    raise
+                if attempt >= len(self._risk_retry_delays):
+                    raise
+                if exc.code == -352:
+                    logger.warning("WBI/risk error (-352), refreshing keys")
+                    with self._wbi_lock:
+                        self._wbi_mixin_key = None
+                        self._wbi_cached_at = None
+                self._schedule_api_cooldown()
+        raise AssertionError("unreachable")
+
+    def _request(self, url: str, **kwargs) -> httpx.Response:
+        """Serialize Bilibili API calls and share rate-limit cooldowns."""
+        with self._api_request_lock:
+            self._wait_for_api_slot()
+            response = self._client.get(url, **kwargs)
+            now = time.monotonic()
+            if response.status_code in (412, 429):
+                self._schedule_api_cooldown_locked(now)
+            else:
+                self._risk_streak = 0
+                self._next_api_request_at = now + random.uniform(
+                    *self._api_interval_range
+                )
+            return response
+
+    def _wait_for_api_slot(self) -> None:
+        while True:
+            delay = self._next_api_request_at - time.monotonic()
+            if delay <= 0:
+                return
+            time.sleep(min(0.1, delay))
+
+    def _schedule_api_cooldown(self) -> None:
+        with self._api_request_lock:
+            self._schedule_api_cooldown_locked(time.monotonic())
+
+    def _schedule_api_cooldown_locked(self, now: float) -> None:
+        if not self._risk_retry_delays:
+            return
+        index = min(self._risk_streak, len(self._risk_retry_delays) - 1)
+        delay = self._risk_retry_delays[index]
+        self._risk_streak += 1
+        self._next_api_request_at = max(self._next_api_request_at, now + delay)
 
     def _sign_params(self, params: dict) -> dict:
         """Apply WBI signature to query parameters."""
@@ -127,6 +189,31 @@ class BilibiliAPIClient:
             raise BilibiliAPIError(code, data.get("message", "Unknown error"))
         return data.get("data", {})
 
+    def _parse_raw_response(self, resp: httpx.Response) -> dict:
+        """Return the complete response envelope after validating its code."""
+        resp.raise_for_status()
+        payload = resp.json()
+        code = payload.get("code", -1)
+        if code != 0:
+            raise BilibiliAPIError(code, payload.get("message", "Unknown error"))
+        return payload
+
+    def _get_raw(
+        self,
+        endpoint: str,
+        params: dict,
+        *,
+        signed: bool = False,
+        headers: Optional[dict[str, str]] = None,
+    ) -> dict:
+        def _fetch():
+            request_params = self._sign_params(dict(params)) if signed else dict(params)
+            return self._parse_raw_response(
+                self._request(endpoint, params=request_params, headers=headers)
+            )
+
+        return self._retry_on_wbi_error(_fetch)
+
     # -- API Methods --
 
     def get_video_info(self, bvid: str) -> VideoInfo:
@@ -134,18 +221,130 @@ class BilibiliAPIClient:
 
         def _fetch():
             params = self._sign_params({"bvid": bvid})
-            resp = self._client.get(ep.VIEW_ENDPOINT, params=params)
+            resp = self._request(ep.VIEW_ENDPOINT, params=params)
             return self._parse_response(resp)
 
         data = self._retry_on_wbi_error(_fetch)
         return _parse_video_info(bvid, data)
+
+    def get_video_info_raw(self, bvid: str) -> dict:
+        """Fetch the complete, unmodified metadata response envelope."""
+        return self._get_raw(ep.VIEW_ENDPOINT, {"bvid": bvid}, signed=True)
+
+    def get_creator_profile(self, mid: int) -> dict:
+        """Fetch the complete creator profile response envelope."""
+        self._ensure_creator_session(mid)
+        return self._get_raw(
+            ep.CREATOR_PROFILE_ENDPOINT,
+            {"mid": mid, **_creator_fingerprint_params()},
+            signed=True,
+            headers=_creator_headers(mid),
+        )
+
+    def get_creator_video_page(self, mid: int, page: int, page_size: int = 30) -> dict:
+        """Fetch one page of creator submissions, preserving the raw response."""
+        self._ensure_creator_session(mid)
+        return self._get_raw(
+            ep.CREATOR_VIDEOS_ENDPOINT,
+            {
+                "mid": mid,
+                "pn": page,
+                "ps": page_size,
+                "order": "pubdate",
+                "order_avoided": "true",
+                "keyword": "",
+                "tid": 0,
+                "platform": "web",
+                "web_location": 1550101,
+                **_creator_fingerprint_params(),
+            },
+            signed=True,
+            headers=_creator_headers(mid),
+        )
+
+    def get_creator_medialist_page(
+        self,
+        mid: int,
+        cursor: int = 0,
+        page_size: int = 20,
+    ) -> dict:
+        """Fetch creator uploads from the cursor-based "play all" list."""
+        params = {
+            "type": 1,
+            "biz_id": mid,
+            "tid": 0,
+            "sort_field": 1,
+            "desc": "true",
+            "ps": page_size,
+            "with_current": "false",
+        }
+        if cursor:
+            params["oid"] = cursor
+        return self._get_raw(
+            ep.CREATOR_MEDIALIST_ENDPOINT,
+            params,
+            headers={"Referer": f"https://www.bilibili.com/list/{mid}"},
+        )
+
+    def _ensure_creator_session(self, mid: int) -> None:
+        """Initialize the anonymous cookies used by Bilibili space pages."""
+        if self._creator_session_ready:
+            return
+        with self._creator_session_lock:
+            if self._creator_session_ready:
+                return
+            try:
+                self._request(
+                    f"https://space.bilibili.com/{mid}/video",
+                    headers=_creator_headers(mid),
+                ).raise_for_status()
+                response = self._request(ep.FINGERPRINT_ENDPOINT)
+                response.raise_for_status()
+                fingerprint = response.json().get("data") or {}
+                if fingerprint.get("b_3") and not self._client.cookies.get("buvid3"):
+                    self._client.cookies.set(
+                        "buvid3", fingerprint["b_3"], domain=".bilibili.com"
+                    )
+                if fingerprint.get("b_4"):
+                    self._client.cookies.set(
+                        "buvid4", fingerprint["b_4"], domain=".bilibili.com"
+                    )
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
+                logger.debug("Creator session initialization failed: %s", exc)
+            self._creator_session_ready = True
+
+    def get_comment_page(self, aid: int, page: int, page_size: int = 20) -> dict:
+        """Fetch one top-level comment page, preserving all response fields."""
+        return self._get_raw(
+            ep.COMMENTS_ENDPOINT,
+            {"oid": aid, "type": 1, "pn": page, "ps": page_size, "sort": 0},
+        )
+
+    def get_comment_replies(
+        self,
+        aid: int,
+        root: int,
+        page: int,
+        page_size: int = 20,
+    ) -> dict:
+        """Fetch one nested-reply page for a root comment."""
+        return self._get_raw(
+            ep.COMMENT_REPLIES_ENDPOINT,
+            {
+                "oid": aid,
+                "type": 1,
+                "root": root,
+                "pn": page,
+                "ps": page_size,
+            },
+        )
 
     def get_video_info_by_aid(self, aid: int) -> VideoInfo:
         """Fetch video metadata by AV/AID number from /x/web-interface/view."""
 
         def _fetch():
             params = self._sign_params({"aid": aid})
-            resp = self._client.get(ep.VIEW_ENDPOINT, params=params)
+            resp = self._request(ep.VIEW_ENDPOINT, params=params)
             return self._parse_response(resp)
 
         data = self._retry_on_wbi_error(_fetch)
@@ -182,7 +381,7 @@ class BilibiliAPIClient:
                 "fourk": 1,
             }
             signed = self._sign_params(params)
-            resp = self._client.get(ep.PLAYURL_ENDPOINT, params=signed)
+            resp = self._request(ep.PLAYURL_ENDPOINT, params=signed)
             data = self._parse_response(resp)
             return _parse_playurl(data)
 
@@ -193,7 +392,7 @@ class BilibiliAPIClient:
 
         def _fetch():
             params = self._sign_params({"bvid": bvid, "cid": cid})
-            resp = self._client.get(ep.PLAYER_INFO_ENDPOINT, params=params)
+            resp = self._request(ep.PLAYER_INFO_ENDPOINT, params=params)
             return self._parse_response(resp)
 
         data = self._retry_on_wbi_error(_fetch)
@@ -230,19 +429,24 @@ class BilibiliAPIClient:
         Returns dict with 'isLogin', 'uname', 'mid', 'face', etc.
         Returns empty dict if not logged in.
         """
-        resp = self._client.get(ep.NAV_ENDPOINT)
-        resp.raise_for_status()
-        data = resp.json()
+        def _fetch():
+            resp = self._request(ep.NAV_ENDPOINT)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = self._retry_on_wbi_error(_fetch)
         if data.get("code") == 0 and data.get("data"):
             return data["data"]
         return {}
 
     def get_page_list(self, bvid: str) -> list[VideoPage]:
         """Get page list for multi-part videos."""
-        params = {"bvid": bvid}
-        params = self._sign_params(params)
-        resp = self._client.get(ep.PAGELIST_ENDPOINT, params=params)
-        data = self._parse_response(resp)
+        def _fetch():
+            params = self._sign_params({"bvid": bvid})
+            resp = self._request(ep.PAGELIST_ENDPOINT, params=params)
+            return self._parse_response(resp)
+
+        data = self._retry_on_wbi_error(_fetch)
         return [
             VideoPage(
                 cid=p["cid"],
@@ -365,6 +569,45 @@ def _build_fnval(
     if preferred_codec == 13:
         fnval |= FNVAL_AV1
     return fnval
+
+
+def _creator_fingerprint_params() -> dict[str, str]:
+    """Build the browser-fingerprint fields required by current space APIs."""
+    width, height = random.choice(
+        [(1920, 1080), (1366, 768), (1536, 864), (1280, 720), (1440, 900)]
+    )
+    wh_random = random.randrange(114)
+    offset_random = random.randrange(514)
+    scroll_top = random.randrange(101)
+    interaction = {
+        "ds": [],
+        "wh": [
+            2 * width + 2 * height + 3 * wh_random,
+            4 * width - height + wh_random,
+            wh_random,
+        ],
+        "of": [
+            3 * scroll_top + offset_random,
+            4 * scroll_top + 2 * offset_random,
+            offset_random,
+        ],
+    }
+    return {
+        "dm_img_list": "[]",
+        "dm_img_str": "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ",
+        "dm_cover_img_str": (
+            "QU5HTEUgKEFwcGxlLCBBcHBsZSBNMSwgT3BlbkdMIDQuMSBNZXRhbCAtIDg5LjMp"
+            "R29vZ2xlIEluYy4gKEFwcGxlKQ"
+        ),
+        "dm_img_inter": json.dumps(interaction, separators=(",", ":")),
+    }
+
+
+def _creator_headers(mid: int) -> dict[str, str]:
+    return {
+        "Referer": f"https://space.bilibili.com/{mid}/video",
+        "Origin": "https://space.bilibili.com",
+    }
 
 
 class BilibiliAPIError(Exception):

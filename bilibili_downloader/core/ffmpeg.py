@@ -108,6 +108,8 @@ class FFmpegManager:
         output_path: Path,
         executable: str = "ffmpeg",
         extra_args: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+        cover_path: Path | None = None,
     ) -> list[str]:
         """Build ffmpeg command to merge video and audio streams.
 
@@ -122,9 +124,23 @@ class FFmpegManager:
             "-y",  # Overwrite output without asking
             "-i", str(video_path.resolve()),
             "-i", str(audio_path.resolve()),
-            "-c", "copy",
-            "-movflags", "+faststart",
         ]
+        if cover_path is not None:
+            cmd.extend([
+                "-i", str(cover_path.resolve()),
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-map", "2:v:0",
+                "-c", "copy",
+                "-disposition:v:0", "default",
+                "-disposition:v:1", "attached_pic",
+            ])
+        else:
+            cmd.extend(["-c", "copy"])
+        for key, value in (metadata or {}).items():
+            if value:
+                cmd.extend(["-metadata", f"{key}={value}"])
+        cmd.extend(["-movflags", "+faststart"])
         if extra_args:
             cmd.extend(extra_args)
         cmd.append(str(output_path.resolve()))
@@ -138,6 +154,8 @@ class FFmpegManager:
         output_path: Path,
         custom_path: Optional[str] = None,
         cancel_checker: Optional[Callable[[], bool]] = None,
+        metadata: dict[str, str] | None = None,
+        cover_path: Path | None = None,
     ) -> tuple[bool, str]:
         """Execute FFmpeg to merge video and audio streams.
 
@@ -158,7 +176,14 @@ class FFmpegManager:
             f"{output_path.stem}.part{output_path.suffix}"
         )
         _remove_partial_output(safe_output)
-        cmd = cls.build_merge_command(video_path, audio_path, safe_output, executable=str(exe))
+        cmd = cls.build_merge_command(
+            video_path,
+            audio_path,
+            safe_output,
+            executable=str(exe),
+            metadata=metadata,
+            cover_path=cover_path,
+        )
 
         process = None
         try:

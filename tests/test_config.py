@@ -74,8 +74,10 @@ class TestConfigManager:
         loaded = manager.load()
         assert loaded.output_dir == "/new/dir"
 
-    def test_sessdata_saved_to_keyring_when_available(self, monkeypatch, tmp_path):
-        """SESSDATA should stay out of JSON when keyring storage succeeds."""
+    def test_sessdata_saved_to_keyring_and_recovery_config(
+        self, monkeypatch, tmp_path
+    ):
+        """SESSDATA should survive a later Keychain read failure."""
         saved = {}
         monkeypatch.setattr(
             config_module,
@@ -92,8 +94,10 @@ class TestConfigManager:
         ConfigManager(config_path=config_path).save(AppSettings(sessdata="secret"))
 
         raw = json.loads(config_path.read_text(encoding="utf-8"))
-        assert raw["sessdata"] == ""
+        assert raw["sessdata"]
+        assert raw["sessdata"] != "secret"
 
+        monkeypatch.setattr(config_module, "_load_sessdata_from_keyring", lambda: "")
         loaded = ConfigManager(config_path=config_path).load()
         assert loaded.sessdata == "secret"
 
@@ -110,6 +114,25 @@ class TestConfigManager:
 
         loaded = ConfigManager(config_path=config_path).load()
         assert loaded.sessdata == "secret"
+
+    def test_sessdata_falls_back_when_keyring_write_cannot_be_verified(
+        self, monkeypatch, tmp_path
+    ):
+        class BrokenKeyring:
+            def set_password(self, service, account, value):
+                pass
+
+            def get_password(self, service, account):
+                raise RuntimeError("keychain read failed")
+
+        monkeypatch.setattr(config_module, "_get_keyring", BrokenKeyring)
+        config_path = tmp_path / "config.json"
+        ConfigManager(config_path=config_path).save(AppSettings(sessdata="secret"))
+
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        assert raw["sessdata"]
+        assert raw["sessdata"] != "secret"
+        assert ConfigManager(config_path=config_path).load().sessdata == "secret"
 
     def test_default_path_migrates_legacy_config(self, monkeypatch, tmp_path):
         legacy_path = tmp_path / "legacy" / "config.json"

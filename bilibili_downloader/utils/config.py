@@ -77,6 +77,9 @@ def _save_sessdata_to_keyring(sessdata: str) -> bool:
     try:
         if sessdata:
             keyring.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, sessdata)
+            if keyring.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT) != sessdata:
+                logger.warning("Keyring credential verification failed; using config fallback")
+                return False
         else:
             try:
                 keyring.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
@@ -84,7 +87,7 @@ def _save_sessdata_to_keyring(sessdata: str) -> bool:
                 pass
         return True
     except Exception as e:  # noqa: BLE001
-        logger.debug("Keyring write failed: %s", e)
+        logger.warning("Keyring write or verification failed; using config fallback: %s", e)
         return False
 
 
@@ -139,11 +142,11 @@ class ConfigManager:
         data = settings.model_dump()
         sessdata = data.pop("sessdata", "")
         if sessdata:
-            if _save_sessdata_to_keyring(sessdata):
-                data["sessdata"] = ""
-            else:
-                data["sessdata"] = sessdata
-                data = _obfuscate(data)
+            _save_sessdata_to_keyring(sessdata)
+            # Keep a mode-0600 recovery copy because some macOS Keychain
+            # backends can write successfully but fail after process restart.
+            data["sessdata"] = sessdata
+            data = _obfuscate(data)
         else:
             _save_sessdata_to_keyring("")
             data["sessdata"] = ""

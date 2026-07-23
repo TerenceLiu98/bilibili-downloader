@@ -2,7 +2,7 @@
 
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -132,6 +132,36 @@ class VideoInfo(BaseModel):
         )
 
 
+class CreatorVideoEntry(BaseModel):
+    """One submission in a reusable creator index."""
+
+    bvid: str
+    aid: int = 0
+    title: str = ""
+    description: str = ""
+    cover_url: str = ""
+    published_at: int = 0
+    duration: int = 0
+    play_count: int = 0
+    comment_count: int = 0
+
+
+class CreatorVideoIndex(BaseModel):
+    """Versioned snapshot of all submissions exposed by an UP account."""
+
+    schema_version: int = 2
+    mid: int
+    name: str
+    source: str
+    fetched_at: str
+    total: int = 0
+    reported_total: int = 0
+    complete: bool = True
+    next_cursor: int = 0
+    videos: list[CreatorVideoEntry] = Field(default_factory=list)
+    raw_pages: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class DownloadItem(BaseModel):
     """Tracks a single download task."""
     video_info: VideoInfo
@@ -141,6 +171,14 @@ class DownloadItem(BaseModel):
     output_path: str = ""
     download_danmaku: bool = False
     download_subtitle: bool = False
+    download_metadata: bool = False
+    download_cover: bool = False
+    download_comments: bool = False
+    embed_metadata: bool = False
+    embed_cover: bool = False
+    refresh_sidecars: bool = False
+    creator_mid: int = 0
+    creator_name: str = ""
     selected_subtitle_lan: str = "zh-Hans"
     status: str = "pending"  # pending/downloading/merging/done/failed
     progress: float = 0.0
@@ -172,10 +210,15 @@ class DownloadOutcome(BaseModel):
 
     video_path: str
     danmaku_path: Optional[str] = None
+    danmaku_xml_path: Optional[str] = None
+    metadata_path: Optional[str] = None
+    comments_path: Optional[str] = None
+    cover_path: Optional[str] = None
     subtitle_paths: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     actual_quality: Optional[int] = None
     actual_video_codec: Optional[int] = None
+    skipped_media: bool = False
 
     @property
     def is_partial(self) -> bool:
@@ -191,6 +234,11 @@ class AppSettings(BaseModel):
     default_video_codec: int = 12  # HEVC
     download_danmaku: bool = False
     download_subtitle: bool = False
+    download_metadata: bool = True
+    download_cover: bool = True
+    download_comments: bool = False
+    embed_metadata: bool = True
+    embed_cover: bool = True
     sessdata: str = ""
     ffmpeg_path: str = ""
     max_concurrent_downloads: int = Field(default=3, ge=1, le=8)
