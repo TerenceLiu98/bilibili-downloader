@@ -200,6 +200,128 @@ def test_concurrency_semaphore_caps_inflight(tmp_path):
     assert peak <= 2, f"concurrency exceeded cap (peak={peak})"
 
 
+def test_progress_ticks_update_row_in_place_without_rebuild(tmp_path):
+    """Per-tick DownloadProgress repaints one row, never rebuilds the table.
+
+    Guards the incremental ``refresh_row_by_id`` path: after several progress
+    ticks for the same download the row count must stay 1 (no spurious
+    add/clear churn) while the 进度 / 状态 cells reflect the latest state.
+    """
+    from bilibili_downloader.tui import messages
+    from bilibili_downloader.tui.app import BiliFlowTUI
+    from bilibili_downloader.tui.widgets.download_queue import DownloadQueue
+
+    async def run():
+        p1, p2, p3 = _config_patches(tmp_path)
+        with p1, p2, p3:
+            app = BiliFlowTUI()
+            async with app.run_test(size=(120, 44)) as pilot:
+                await pilot.pause()
+                table = app.query_one(DownloadQueue)
+                # Add a row to the model directly and render it, WITHOUT
+                # spawning a real worker (which would race these ticks with its
+                # own lifecycle messages). We are exercising the App's
+                # progress-handler → incremental-render path only.
+                did = app.state.queue.add(_item("BV1", "进度测试"))
+                table.refresh_model()
+                await pilot.pause()
+                assert table.row_count == 1
+
+                # Drive several progress ticks for the same download.
+                for pct in (0.10, 0.25, 0.50, 0.80):
+                    app.post_message(messages.DownloadProgress(did, pct, "下载中"))
+                    await pilot.pause()
+
+                # Row count unchanged — no full-rebuild churn.
+                assert table.row_count == 1
+                row = table.get_row_at(0)
+                # 状态 cell (index 3) carries the latest status text.
+                assert "下载中" in row[3]
+                # 进度 cell (index 2) reflects ~80%, not the initial 0%.
+                assert "80" in row[2]
+
+    asyncio.run(run())
+
+
+# --- file browser screen ---
+
+def test_file_browser_picks_file(tmp_path):
+    """File mode: descending into a dir and selecting a pickable file dismisses
+    with that Path; non-matching names stay listed but aren't selectable."""
+    import asyncio
+
+    from bilibili_downloader.tui.screens import FileBrowserScreen, _json_filter
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "index.json").write_text("{}", encoding="utf-8")
+    (sub / "ignore.txt").write_text("x", encoding="utf-8")
+
+    async def run():
+        result = {}
+
+        def on_done(path):
+            result["path"] = path
+
+        from bilibili_downloader.tui.app import BiliFlowTUI
+
+        p1, p2, p3 = _config_patches(tmp_path)
+        with p1, p2, p3:
+            app = BiliFlowTUI()
+            async with app.run_test(size=(110, 40)) as pilot:
+                app.push_screen(
+                    FileBrowserScreen(
+                        start=tmp_path, select_file=True, name_filter=_json_filter,
+                        title="选 json",
+                    ),
+                    on_done,
+                )
+                await pilot.pause()
+                browser = app.screen
+                assert browser is not None
+                # Open the subdir.
+                browser._dir = sub
+                browser._reload()
+                await pilot.pause()
+                # Cursor lands on first row (index.json, sorted before ignore.txt
+                # because the filter still lists it but it's not pickable).
+                browser._activate(str(sub / "index.json"))
+                await pilot.pause()
+        assert result.get("path") == sub / "index.json"
+
+    asyncio.run(run())
+
+
+def test_file_browser_directory_mode_dismisses_dir(tmp_path):
+    """Directory mode: 选择当前目录 dismisses with the current directory Path."""
+    import asyncio
+
+    from bilibili_downloader.tui.screens import FileBrowserScreen
+
+    async def run():
+        result = {}
+
+        def on_done(path):
+            result["path"] = path
+
+        from bilibili_downloader.tui.app import BiliFlowTUI
+
+        p1, p2, p3 = _config_patches(tmp_path)
+        with p1, p2, p3:
+            app = BiliFlowTUI()
+            async with app.run_test(size=(110, 40)) as pilot:
+                app.push_screen(
+                    FileBrowserScreen(start=tmp_path, select_file=False, title="选目录"),
+                    on_done,
+                )
+                await pilot.pause()
+                app.screen.query_one("#fb-select").press()
+                await pilot.pause()
+        assert result.get("path") == tmp_path
+
+    asyncio.run(run())
+
+
 # --- default-behavior guard ---
 
 def test_bare_invocation_launches_gui_not_tui():

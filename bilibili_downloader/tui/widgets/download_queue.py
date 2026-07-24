@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.widgets import DataTable
 
@@ -286,13 +287,34 @@ class DownloadQueue(DataTable):
     def refresh_model(self) -> None:
         self._full_refresh()
 
-    def refresh_row_by_id(self, download_id: int) -> None:
-        """Re-render a row by id.
+    # Column layout is fixed by on_mount's add_columns: 0 视频, 1 规格,
+    # 2 进度, 3 状态, 4 操作. add_columns with bare labels yields integer
+    # (None-named) column keys, so a name lookup misses — use the stable
+    # positional indices for the cells that change on a progress tick.
+    _COL_PROGRESS = 2
+    _COL_STATUS = 3
+    _COL_ACTION = 4
 
-        P1 falls back to a full table refresh for simplicity and correctness;
-        P2 will switch this to an incremental ``update_cell_at`` per-cell update.
+    def refresh_row_by_id(self, download_id: int) -> None:
+        """Re-render a single row in place, without rebuilding the table.
+
+        Progress ticks fire on every download callback, so a full
+        ``_full_refresh()`` here would clear and rebuild the whole DataTable
+        each tick — flickering the table, resetting the cursor, and dropping
+        focus on long downloads. Instead, update only the cells that can change
+        (进度 / 状态 / 操作) on the existing row. Falls back to a full refresh
+        only when the row key is not yet rendered (e.g. a just-added row that
+        hasn't been laid out, or a key miss after a delete).
         """
         row = self.model.get(download_id)
         if row is None:
             return
-        self._full_refresh()
+        try:
+            row_index = self.get_row_index(str(download_id))
+        except (KeyError, ValueError):
+            self._full_refresh()
+            return
+        progress = _progress_bar(row.pct, row.state)
+        self.update_cell_at(Coordinate(row_index, self._COL_PROGRESS), progress)
+        self.update_cell_at(Coordinate(row_index, self._COL_STATUS), row.status)
+        self.update_cell_at(Coordinate(row_index, self._COL_ACTION), self._action_hint(row))

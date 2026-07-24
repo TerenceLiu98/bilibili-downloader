@@ -7,6 +7,7 @@ checkbox is disabled until a successful resolve (parity with Qt).
 
 from __future__ import annotations
 
+from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Checkbox, Select, Static
@@ -80,6 +81,10 @@ class ControlPanel(Vertical):
             Button("UP 主投稿索引", id="creator-btn"),
         )
 
+    def __init__(self):
+        super().__init__()
+        self._video_streams = []
+
     # --- population on resolve ---
     def populate_pages(self, info) -> None:
         select = self.query_one("#page-select", Select)
@@ -110,6 +115,17 @@ class ControlPanel(Vertical):
         codecs = [c for c in (12, 7, 13) if not available or c in available]
         select.set_options([(CODEC_LABELS[c], c) for c in codecs])
         select.value = preferred_codec if preferred_codec in codecs else (codecs[0] if codecs else 12)
+
+    def set_video_streams(self, video_streams) -> None:
+        """Store the current video streams for quality-change codec filtering."""
+        self._video_streams = video_streams
+
+    @on(Select.Changed, "#quality-select")
+    def _on_quality_changed(self, event: Select.Changed) -> None:
+        """When quality changes, re-filter available codecs (parity with GUI)."""
+        if self._video_streams:
+            current_codec = self.query_one("#codec-select", Select).value
+            self.refresh_codecs(self._video_streams, event.value, current_codec)
 
     def enable_subtitle(self) -> None:
         self.query_one("#chk-subtitle", Checkbox).disabled = False

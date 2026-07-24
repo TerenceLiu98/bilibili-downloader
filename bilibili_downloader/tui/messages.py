@@ -70,6 +70,25 @@ class BatchItemFailed(Message):
         self.error = error
 
 
+class BatchItemRetrying(Message):
+    """A transient/风控 error hit during batch resolve; backing off + retrying."""
+
+    def __init__(self, source: str, attempt: int, delay: float):
+        super().__init__()
+        self.source = source
+        self.attempt = attempt
+        self.delay = delay
+
+
+class BatchProgress(Message):
+    """How many of the batch inputs have been resolved so far."""
+
+    def __init__(self, done: int, total: int):
+        super().__init__()
+        self.done = done
+        self.total = total
+
+
 class BatchDone(Message):
     pass
 

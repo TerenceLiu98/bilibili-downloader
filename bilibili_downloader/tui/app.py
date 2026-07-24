@@ -109,6 +109,7 @@ class BiliFlowTUI(App):
         self.state: AppState | None = None
         self._semaphore: threading.Semaphore | None = None
         self._model = DownloadQueueModel()
+        self._creator_worker = None
 
     # --- helpers to reach widgets ---
     def _sidebar(self) -> NavSidebar:
@@ -172,17 +173,20 @@ class BiliFlowTUI(App):
         self.notify(f"正在批量解析 {n} 个链接…")
         self.start_batch(urls, flags, quality, codec,
                          creator_mid=(creator_index.mid if creator_index else 0),
-                         creator_name=(creator_index.name if creator_index else ""))
+                         creator_name=(creator_index.name if creator_index else ""),
+                         creator_index=creator_index)
 
     @work(thread=True, group="batch")
-    def start_batch(self, urls, flags, quality, codec, creator_mid=0, creator_name="") -> None:
+    def start_batch(self, urls, flags, quality, codec, creator_mid=0, creator_name="", creator_index=None) -> None:
         assert self.state is not None
         from bilibili_downloader.core.models import VideoQuality
+        from bilibili_downloader.tui.resolve_cache import ResolveCache
 
         q = VideoQuality(quality) if quality and not isinstance(quality, VideoQuality) else quality
+        cache = ResolveCache.for_creator(self.state.settings.output_dir, creator_index) if creator_index else None
         BatchWorker(
             self, self.state.api_client, urls, flags,
-            quality=q, codec=codec, creator_mid=creator_mid, creator_name=creator_name,
+            quality=q, codec=codec, creator_mid=creator_mid, creator_name=creator_name, cache=cache,
         ).run()
 
     @on(messages.BatchItemReady)
@@ -195,9 +199,21 @@ class BiliFlowTUI(App):
         self.state.queue.add_error(message.error)
         self._refresh_queue()
 
+    @on(messages.BatchProgress)
+    def _on_batch_progress(self, message: messages.BatchProgress) -> None:
+        """Only notify on completion to avoid spam for large indexes."""
+        if message.done == message.total:
+            self.notify(f"批量解析完成 {message.total} 条", severity="information")
+
+    @on(messages.BatchItemRetrying)
+    def _on_batch_item_retrying(self, message: messages.BatchItemRetrying) -> None:
+        """User-visible backoff feedback for 风控 retries."""
+        self.notify(f"{message.source} 触发风控，第{message.attempt}次重试（等待 {message.delay:g}s）", severity="warning")
+
     @on(messages.BatchDone)
     def _on_batch_done_msg(self, message: messages.BatchDone) -> None:
-        self.notify("批量解析完成", severity="information")
+        # BatchProgress now handles completion notification, so we suppress this to avoid duplicate toasts.
+        pass
 
     # --- creator ---
     def _open_creator(self) -> None:
@@ -228,8 +244,13 @@ class BiliFlowTUI(App):
             mid = parse_creator_mid(source)
             candidates = list(Path(output_dir).glob(f"*_{mid}/index.partial.json"))
             if candidates:
-                resume_index = load_creator_index(candidates[0])
-                self.notify(f"从检查点继续（已有 {len(resume_index.videos)} 个投稿）")
+                # Sort candidates by mtime descending (most recent first)
+                latest = max(candidates, key=lambda p: p.stat().st_mtime)
+                loaded = load_creator_index(latest)
+                # Only resume if the index is incomplete and has a next_cursor
+                if not getattr(loaded, 'complete', False) and getattr(loaded, 'next_cursor', None):
+                    resume_index = loaded
+                    self.notify(f"从检查点继续（已有 {len(resume_index.videos)} 个投稿）")
         except Exception as exc:  # noqa: BLE001
             logger.debug("creator resume detection failed: %s", exc)
 
@@ -238,9 +259,17 @@ class BiliFlowTUI(App):
     @work(thread=True, group="creator")
     def run_creator_fetch(self, source, output_dir, resume_index) -> None:
         assert self.state is not None
-        CreatorIndexWorker(
+        worker = CreatorIndexWorker(
             self, self.state.api_client, source, output_dir, resume_index
-        ).run()
+        )
+        self._creator_worker = worker
+        worker.run()
+        self._creator_worker = None
+
+    def cancel_creator_fetch(self) -> None:
+        """Cancel an in-flight creator index fetch."""
+        if hasattr(self, '_creator_worker') and self._creator_worker is not None:
+            self._creator_worker.cancel()
 
     def persist_creator_index(self, index) -> None:
         """Write the final index.json and drop the partial checkpoint."""
@@ -348,11 +377,14 @@ class BiliFlowTUI(App):
         self.state.current_video_streams = message.video_streams
         self.state.current_playurl_ok = message.playurl_ok
 
+        # Store video_streams in control panel for quality-change codec filtering
+        cp = self._control_panel()
+        cp.set_video_streams(message.video_streams)
+
         self._resolve_btn().disabled = False
         self._resolve_btn().label = "解析"
         self._video_info().show_video(info)
 
-        cp = self._control_panel()
         cp.populate_pages(info)
         cp.populate_quality(message.video_streams, self.state.settings.default_quality)
         cp.refresh_codecs(
@@ -438,7 +470,16 @@ class BiliFlowTUI(App):
     def _on_download_progress(self, message: messages.DownloadProgress) -> None:
         assert self.state is not None
         self.state.queue.set_progress(message.download_id, message.pct, message.status_text)
-        self._refresh_queue()
+        # Per-tick progress repaints only the changed row; structural events
+        # (add/done/failed/cancel) still use the full refresh in _refresh_queue.
+        # If the incremental update can't locate the row (e.g. it was added this
+        # tick and not yet laid out), fall back to a full refresh so the cell is
+        # never left stale — but log it so a real regression is diagnosable.
+        try:
+            self.query_one(DownloadQueue).refresh_row_by_id(message.download_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("incremental row refresh failed, falling back", exc_info=True)
+            self._refresh_queue()
 
     @on(messages.DownloadFinished)
     def _on_download_finished(self, message: messages.DownloadFinished) -> None:
@@ -603,6 +644,7 @@ class BiliFlowTUI(App):
             return
         nav = message.nav_info.get("data") or {}
         self.state.login.checking = False
+        self.state.login.unknown = False
         if message.nav_info.get("data", {}).get("isLogin") if "data" in message.nav_info else nav.get("isLogin"):
             self.state.login.is_login = True
             self.state.login.uname = str(nav.get("uname", ""))
@@ -617,5 +659,6 @@ class BiliFlowTUI(App):
         if message.request_id != self.state.login_request_id:
             return
         self.state.login.checking = False
-        self.state.login = LoginState()
+        self.state.login.unknown = True
+        self._sidebar().set_login_label(self.state.login.label)
         self._sidebar().set_login_label(self.state.login.label)

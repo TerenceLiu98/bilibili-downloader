@@ -7,6 +7,8 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
+from bilibili_downloader import __version__
+
 HELP = """\
 全局快捷键
   Ctrl+L   登录 / 退出登录
@@ -22,7 +24,13 @@ HELP = """\
   r        重试失败任务
   Delete   删除一行
   C        取消全部任务
-"""
+
+关于
+  哔哩哔哩视频下载器 v{}
+
+一款桌面端B站视频下载工具。
+支持4K、HDR、杜比视界、弹幕和字幕下载。
+""".format(__version__)
 
 
 class HelpScreen(ModalScreen):

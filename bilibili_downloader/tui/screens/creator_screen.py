@@ -10,6 +10,8 @@ The App owns the fetch worker + enqueue; this screen only gathers the selection.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -35,6 +37,7 @@ class CreatorScreen(ModalScreen):
     CreatorScreen #cs-filter { height: 3; }
     CreatorScreen #cs-import-path { height: 3; }
     CreatorScreen #cs-fetch { background: #6366f1; color: #ffffff; border: solid #7c7ff5; }
+    CreatorScreen #cs-browse { background: #1b1b1f; color: #e8e8ec; border: solid #33333a; }
     CreatorScreen #cs-import { background: #1b1b1f; color: #e8e8ec; border: solid #33333a; }
     CreatorScreen #cs-enqueue { background: #6366f1; color: #ffffff; border: solid #7c7ff5; }
     CreatorScreen #cs-cancel { background: #1b1b1f; color: #e8e8ec; border: solid #33333a; }
@@ -68,6 +71,7 @@ class CreatorScreen(ModalScreen):
                     placeholder="已有 index.json 路径（导入，可选）",
                     id="cs-import-path",
                 ),
+                Button("浏览", id="cs-browse"),
                 Button("导入", id="cs-import"),
             )
             yield Static("", id="cs-status")
@@ -102,6 +106,33 @@ class CreatorScreen(ModalScreen):
         self.query_one("#cs-status", Static).update("正在抓取索引…")
         self.app.start_creator_fetch(source, self._output_dir)
 
+    @on(Button.Pressed, "#cs-browse")
+    def _browse_import(self) -> None:
+        from bilibili_downloader.tui.screens import FileBrowserScreen, _json_filter
+
+        current_path = self.query_one("#cs-import-path", Input).value.strip()
+        start = Path(current_path).expanduser() if current_path else None
+        # If the current path is a file, start from its parent directory
+        if start and start.is_file():
+            start = start.parent
+        # Fall back to output directory if neither is valid
+        if not start or not start.is_dir():
+            start = Path(self._output_dir).expanduser()
+
+        def _write(picked) -> None:
+            if picked is not None:
+                self.query_one("#cs-import-path", Input).value = str(picked)
+
+        self.app.push_screen(
+            FileBrowserScreen(
+                start,
+                select_file=True,
+                name_filter=_json_filter,
+                title="选择 index.json"
+            ),
+            _write,
+        )
+
     # --- import ---
     @on(Input.Submitted, "#cs-import-path")
     def _on_import_submitted(self, event: Input.Submitted) -> None:
@@ -110,8 +141,6 @@ class CreatorScreen(ModalScreen):
 
     @on(Button.Pressed, "#cs-import")
     def _on_import(self) -> None:
-        from pathlib import Path
-
         from bilibili_downloader.core.creator import load_creator_index
 
         raw = self.query_one("#cs-import-path", Input).value.strip()
@@ -202,6 +231,7 @@ class CreatorScreen(ModalScreen):
     # --- enqueue / cancel ---
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cs-cancel":
+            self.app.cancel_creator_fetch()
             self.dismiss(None)
         elif event.button.id == "cs-enqueue":
             if self._index is None:

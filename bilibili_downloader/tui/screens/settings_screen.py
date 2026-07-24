@@ -8,6 +8,8 @@ refreshes home checkbox defaults.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -46,7 +48,11 @@ class SettingsScreen(ModalScreen):
             yield Static("下载设置", id="ss-title")
             with VerticalScroll():
                 yield Static("输出目录", classes="ss-label")
-                yield Input(value=s.output_dir, id="ss-output")
+                yield Horizontal(
+                    Input(value=s.output_dir, id="ss-output"),
+                    Button("浏览", id="ss-browse-output"),
+                    classes="ss-row",
+                )
 
                 yield Static("默认画质", classes="ss-label")
                 yield Select(QUALITY_OPTIONS, value=s.default_quality.value, id="ss-quality", allow_blank=False)
@@ -65,6 +71,7 @@ class SettingsScreen(ModalScreen):
                 yield Static("FFmpeg 路径（留空自动检测）", classes="ss-label")
                 yield Horizontal(
                     Input(value=s.ffmpeg_path, id="ss-ffmpeg", placeholder="留空自动检测"),
+                    Button("浏览", id="ss-browse-ffmpeg"),
                     Button("检查", id="ss-check-ffmpeg"),
                     classes="ss-row",
                 )
@@ -117,6 +124,38 @@ class SettingsScreen(ModalScreen):
         path = self.query_one("#ss-ffmpeg", Input).value.strip() or None
         self.app.start_ffmpeg_check(path)
 
+    @on(Button.Pressed, "#ss-browse-output")
+    def _browse_output(self) -> None:
+        from bilibili_downloader.tui.screens import FileBrowserScreen
+
+        start = self.query_one("#ss-output", Input).value.strip() or None
+        self.app.push_screen(
+            FileBrowserScreen(start or None, select_file=False, title="选择保存目录"),
+            self._apply_browsed("#ss-output"),
+        )
+
+    @on(Button.Pressed, "#ss-browse-ffmpeg")
+    def _browse_ffmpeg(self) -> None:
+        from bilibili_downloader.tui.screens import FileBrowserScreen, _ffmpeg_filter
+
+        start = self.query_one("#ss-ffmpeg", Input).value.strip() or None
+        self.app.push_screen(
+            FileBrowserScreen(
+                start or None,
+                select_file=True,
+                name_filter=_ffmpeg_filter,
+                title="选择 FFmpeg",
+            ),
+            self._apply_browsed("#ss-ffmpeg"),
+        )
+
+    def _apply_browsed(self, input_id: str):
+        """Build the dismiss callback that writes a picked Path into an Input."""
+        def _write(picked) -> None:
+            if picked is not None:
+                self.query_one(input_id, Input).value = str(picked)
+        return _write
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "ss-cancel":
             self.dismiss(None)
@@ -124,8 +163,6 @@ class SettingsScreen(ModalScreen):
             self._save()
 
     def _save(self) -> None:
-        from pathlib import Path
-
         output = self.query_one("#ss-output", Input).value.strip()
         if not output:
             self.app.notify("输出目录不能为空", severity="error")

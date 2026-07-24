@@ -24,13 +24,19 @@ class LoginState:
     mid: str = ""
     is_login: bool = False
     checking: bool = False
+    unknown: bool = False
 
     @property
     def label(self) -> str:
+        if self.unknown:
+            return "登录状态未知"
         if self.checking:
             return "正在检查账号…"
         if self.is_login:
-            return f"已登录：{self.uname}" if self.uname else "已登录"
+            label = f"已登录：{self.uname}" if self.uname else "已登录"
+            if self.mid:
+                label += f" ({self.mid})"
+            return label
         return "未登录"
 
 
