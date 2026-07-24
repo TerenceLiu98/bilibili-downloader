@@ -151,9 +151,12 @@ class BiliFlowTUI(App):
 
     # --- batch ---
     def _open_batch(self) -> None:
-        self.push_screen(BatchScreen(), self._on_batch_done)
+        self.push_screen(BatchScreen(), self._handle_batch_result)
 
-    def _on_batch_done(self, urls) -> None:
+    def _handle_batch_result(self, urls) -> None:
+        # NOTE: do NOT name this _on_batch_done — Textual would treat it as the
+        # auto-handler for the BatchDone message and call it with the message
+        # object instead of the screen's dismiss result.
         if urls:
             self._start_batch(urls)
 
