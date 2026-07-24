@@ -164,6 +164,16 @@ def main():
         help="Skip the QR flow and login with a SESSDATA cookie value directly",
     )
 
+    # --- rebuild-cache subcommand (rebuild resolve cache from existing info.json) ---
+    rebuild_parser = subparsers.add_parser(
+        "rebuild-cache",
+        help="从已下载的 info.json 重建解析缓存，避免重新解析（离线）",
+    )
+    rebuild_parser.add_argument(
+        "creator_dir",
+        help="UP 主目录（含 index.json 和 [BV...] 子目录）",
+    )
+
     # --- tui subcommand (full-screen terminal UI) ---
     subparsers.add_parser(
         "tui",
@@ -182,6 +192,8 @@ def main():
         _cli_download_index(args)
     elif args.command == "login":
         _cli_login(args)
+    elif args.command == "rebuild-cache":
+        _cli_rebuild_cache(args)
     elif args.command == "tui":
         _launch_tui()
     else:
@@ -380,6 +392,16 @@ def _cli_login(args: argparse.Namespace) -> None:
 
     try:
         cli_login(args)
+    except KeyboardInterrupt:
+        print("\n已取消")
+        raise SystemExit(130)
+
+
+def _cli_rebuild_cache(args: argparse.Namespace) -> None:
+    from bilibili_downloader.cli.rebuild_cache import cli_rebuild_cache
+
+    try:
+        cli_rebuild_cache(args)
     except KeyboardInterrupt:
         print("\n已取消")
         raise SystemExit(130)
